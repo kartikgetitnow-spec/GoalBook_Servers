@@ -1,0 +1,367 @@
+// =============================================================================
+// GoalBook & VocalReader Database Schema Specification (Prisma)
+// Multi-Platform: Website (GoalReader_web) & Mobile App (GoalBook_MobileApp)
+// Database Engine: PostgreSQL (UTF-8 Collation)
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// 1. ENUMS (Cross-Platform Identifiers)
+// -----------------------------------------------------------------------------
+
+enum ClientPlatform {
+  WEB
+  PHONE
+  IOS
+  ANDROID
+  TABLET
+  DESKTOP
+  OTHER
+}
+
+// -----------------------------------------------------------------------------
+// 2. USER & AUTHENTICATION
+// -----------------------------------------------------------------------------
+
+model User {
+  id              String            @id @default(cuid())
+  email           String            @unique
+  name            String?
+  avatar          String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now()) @updatedAt
+
+  // Core Relations
+  books           Book[]
+  progress        ReadingProgress[]
+  aiChats         AIChat[]
+  vocabulary      Vocabulary[]
+  subscription    Subscription?
+
+  // Extended Phone & Website Relations
+  bookmarks       Bookmark[]
+  highlights      Highlight[]
+  readingSessions ReadingSession[]
+  readingStreak   ReadingStreak?
+  readerSettings  ReaderSettings?
+  devices         UserDevice[]
+  conversations   SavedConversation[]
+
+  @@index([email])
+}
+
+// -----------------------------------------------------------------------------
+// 3. BOOK & CONTENT MANAGEMENT
+// -----------------------------------------------------------------------------
+
+model Book {
+  id          String            @id @default(cuid())
+  title       String
+  author      String?
+  coverUrl    String?
+  fileUrl     String            // Remote storage URL (ImageKit / Cloud URL)
+  fileUri     String?           // Local filesystem URI for mobile offline caching
+  pages       Int               @default(0)
+  fileSize    Int               @default(0)
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isFavorite  Boolean           @default(false)
+  tags        String[]          @default([])
+  source      ClientPlatform    @default(WEB) // Platform where book was ingested (WEB or PHONE)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  // Navigation & Reading Relations
+  progress      ReadingProgress[]
+  bookmarks     Bookmark[]
+  highlights    Highlight[]
+  sessions      ReadingSession[]
+  aiChats       AIChat[]
+  chunks        BookChunk[]
+  conversations SavedConversation[]
+
+  @@index([userId])
+  @@index([title])
+  @@index([source])
+}
+
+// -----------------------------------------------------------------------------
+// 4. CROSS-PLATFORM READING PROGRESS & METRICS
+// -----------------------------------------------------------------------------
+
+model ReadingProgress {
+  id                    String          @id @default(cuid())
+  bookId                String
+  book                  Book            @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  userId                String
+  user                  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentPage           Int             @default(1)
+  currentSentence       Int             @default(0)
+  currentWord           Int             @default(0)
+  completionPercentage  Float           @default(0.0)
+  readingSpeed          Float           @default(0.0) // Words per minute (WPM)
+  timeSpent             Int             @default(0)   // Total time spent in seconds
+  clientPlatform        ClientPlatform  @default(WEB) // Indicates if progress was synced from PHONE or WEB
+  lastReadAt            DateTime        @default(now())
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([bookId])
+  @@index([userId])
+  @@index([userId, bookId])
+}
+
+// -----------------------------------------------------------------------------
+// 5. ANNOTATIONS: BOOKMARKS & HIGHLIGHTS (Phone & Web)
+// -----------------------------------------------------------------------------
+
+model Bookmark {
+  id              String          @id @default(cuid())
+  bookId          String
+  book            Book            @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pageNumber      Int
+  title           String
+  note            String?
+  clientPlatform  ClientPlatform  @default(PHONE)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([bookId])
+  @@index([userId])
+}
+
+model Highlight {
+  id              String          @id @default(cuid())
+  bookId          String
+  book            Book            @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pageNumber      Int
+  text            String
+  color           String          @default("#F59E0B") // Amber / customizable highlight color
+  note            String?
+  clientPlatform  ClientPlatform  @default(PHONE)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([bookId])
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// 6. READING SESSIONS & DAILY STREAKS (Gamification & Analytics)
+// -----------------------------------------------------------------------------
+
+model ReadingSession {
+  id              String          @id @default(cuid())
+  bookId          String
+  book            Book            @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startTime       DateTime
+  endTime         DateTime?
+  durationMinutes Float           @default(0.0)
+  pagesRead       Int             @default(0)
+  wordsPerMinute  Float           @default(0.0)
+  clientPlatform  ClientPlatform  @default(PHONE)
+  createdAt       DateTime        @default(now())
+
+  @@index([bookId])
+  @@index([userId])
+  @@index([startTime])
+}
+
+model ReadingStreak {
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentStreakDays   Int       @default(0)
+  longestStreakDays   Int       @default(0)
+  lastActiveDate      DateTime?
+  weeklyGoalMinutes   Int       @default(60)
+  currentWeekMinutes  Float     @default(0.0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// 7. READER PREFERENCES & DISPLAY SETTINGS (Synced Phone & Web)
+// -----------------------------------------------------------------------------
+
+model ReaderSettings {
+  id                  String          @id @default(cuid())
+  userId              String          @unique
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme               String          @default("dark") // "dark" | "light" | "sepia"
+  fontSize            Float           @default(18.0)
+  fontFamily          String          @default("sans") // "sans" | "serif" | "mono" | "dyslexic"
+  lineHeight          Float           @default(1.6)
+  readingSpeedWpm     Int             @default(250)
+  autoScroll          Boolean         @default(true)
+  highlightColor      String          @default("#F59E0B")
+  ttsVoice            String?
+  ttsPitch            Float           @default(1.0)
+  ttsRate             Float           @default(1.0)
+  karaokeEnabled      Boolean         @default(true)
+  preferredPlatform   ClientPlatform  @default(PHONE)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// 8. MULTI-DEVICE MANAGEMENT (Phone & Web Client Differentiation)
+// -----------------------------------------------------------------------------
+
+model UserDevice {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        ClientPlatform  // IOS, ANDROID, WEB, TABLET, DESKTOP
+  deviceName      String?         // e.g. "iPhone 15 Pro", "Pixel 8", "Chrome macOS"
+  deviceModel     String?
+  osVersion       String?         // e.g. "iOS 17.4", "Android 14"
+  appVersion      String?         // e.g. "1.0.0"
+  pushToken       String?         // APNS / FCM push notification token (phone specific)
+  isPushEnabled   Boolean         @default(false)
+  lastActiveAt    DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([platform])
+  @@index([pushToken])
+}
+
+// -----------------------------------------------------------------------------
+// 9. AI CHATS, SESSIONS & SEMANTIC BOOK CHUNKS
+// -----------------------------------------------------------------------------
+
+model AIChat {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookId          String?
+  book            Book?           @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  question        String
+  answer          String
+  context         String?
+  clientPlatform  ClientPlatform  @default(WEB)
+  createdAt       DateTime        @default(now())
+
+  @@index([userId])
+  @@index([bookId])
+}
+
+model SavedConversation {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookId          String?
+  book            Book?           @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  title           String
+  bookTitle       String?
+  chapterTitle    String?
+  clientPlatform  ClientPlatform  @default(PHONE)
+  messages        ChatMessage[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([bookId])
+}
+
+model ChatMessage {
+  id                String            @id @default(cuid())
+  conversationId    String
+  conversation      SavedConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender            String            // "user" | "assistant" | "system"
+  content           String
+  suggestedPrompts  String[]          @default([])
+  referencedPage    Int?
+  selectedPassage   String?
+  createdAt         DateTime          @default(now())
+
+  @@index([conversationId])
+}
+
+model BookChunk {
+  id              String    @id @default(cuid())
+  bookId          String
+  book            Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pageNumber      Int
+  chunkIndex      Int
+  text            String
+  tokenCount      Int?
+  startCharIndex  Int?
+  endCharIndex    Int?
+  createdAt       DateTime  @default(now())
+
+  @@unique([bookId, pageNumber, chunkIndex])
+  @@index([bookId])
+}
+
+// -----------------------------------------------------------------------------
+// 10. VOCABULARY & BILINGUAL DICTIONARY (English & Hindi)
+// -----------------------------------------------------------------------------
+
+model Vocabulary {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  word            String
+  definition      String
+  pronunciation   String?
+  exampleSentence String?
+  createdAt       DateTime  @default(now())
+
+  @@index([userId])
+  @@index([word])
+}
+
+model SavedWord {
+  id              String          @id @default(cuid())
+  word            String
+  pronunciation   String          @default("")
+  meaning         String
+  hin             String          @default("") // Hindi translation
+  exampleEng      String          @default("") // English example sentence
+  exampleHin      String          @default("") // Hindi example sentence
+  userId          String
+  clientPlatform  ClientPlatform  @default(WEB)
+  createdAt       DateTime        @default(now())
+
+  @@unique([userId, word])
+  @@index([userId])
+  @@index([word])
+}
+
+// -----------------------------------------------------------------------------
+// 11. SUBSCRIPTION & MONETIZATION
+// -----------------------------------------------------------------------------
+
+model Subscription {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan              String    @default("free") // "free" | "pro" | "premium"
+  status            String    @default("active") // "active" | "trialing" | "canceled"
+  currentPeriodEnd  DateTime
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId])
+}

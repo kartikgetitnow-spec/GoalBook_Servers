@@ -1,0 +1,30 @@
+[
+  {
+    "id": "book-e2e-1",
+    "title": "Deep Work",
+    "author": "Cal Newport",
+    "coverUrl": "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c",
+    "fileUrl": "https://example.com/books/deep-work.pdf",
+    "pages": 304,
+    "fileSize": 2500000,
+    "currentPage": 12,
+    "progressPercent": 4,
+    "isFavorite": true,
+    "createdAt": "2026-03-01T00:00:00.000Z",
+    "updatedAt": "2026-03-01T00:00:00.000Z"
+  },
+  {
+    "id": "book-e2e-2",
+    "title": "Atomic Habits",
+    "author": "James Clear",
+    "coverUrl": "https://images.unsplash.com/photo-1512820790803-83ca734da794",
+    "fileUrl": "https://example.com/books/atomic-habits.pdf",
+    "pages": 320,
+    "fileSize": 3100000,
+    "currentPage": 80,
+    "progressPercent": 25,
+    "isFavorite": false,
+    "createdAt": "2026-03-02T00:00:00.000Z",
+    "updatedAt": "2026-03-02T00:00:00.000Z"
+  }
+]

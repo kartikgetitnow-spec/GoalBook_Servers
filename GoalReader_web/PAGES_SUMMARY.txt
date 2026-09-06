@@ -1,0 +1,404 @@
+================================================================================
+                    VOCAL READER — PROJECT PAGES & CODE SUMMARY
+================================================================================
+Project: Vocal Reader (Next-Gen Audiobook & Speed PDF Reader)
+Framework: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS
+Architecture: Client-side Interactive Reader + Serverless API Routes + PostgreSQL/Prisma
+================================================================================
+
+
+================================================================================
+FILE: app/page.tsx
+================================================================================
+TYPE: Main Next.js App Router Page (Home / Dashboard & Reader Screen)
+PURPOSE:
+The primary interactive single-page application (SPA) hub. It controls the lifecycle of the user session, orchestrates switching between the Landing/Upload/Library screen and the Split-Layout Reader Screen, loads saved books from both local storage and cloud, and integrates the audio engine.
+
+WHAT IT ACTUALLY DOES:
+1. Orchestrates Application State:
+   - Manages the active PDF document (document), splash screen visibility (showSplash), mobile sidebar drawer state (isMobileOpen), and saved reading library (libraryBooks).
+   - Integrates the core vocal narration hook (useVocalReader), passing the loaded document to initiate karaoke synchronization and audio speech synthesis.
+2. Manages User Library & Cloud Synchronization:
+   - Runs refreshLibrary() on mount and after document changes.
+   - Merges local offline books stored in browser IndexedDB/localStorage (getLibraryMetadata) with books uploaded to the cloud fetched via /api/books for authenticated Clerk users.
+   - Sorts the books chronologically based on lastReadAt.
+3. Displays the Animated Splash Screen:
+   - Presents SplashScreen on initial load and dismisses it after 2.2 seconds with smooth exit animations using Framer Motion.
+4. Renders Conditional View States:
+   - State A (No document loaded): Displays the Hero Banner, Android APK download link, PDFUploader (drag-and-drop file ingestion), LibraryGrid (recent books to resume or delete), and feature highlights (multi-column support, karaoke highlighting, TTS narration).
+   - State B (Document loaded): Mounts the reading environment with SidebarControls on the left (or mobile drawer) and KaraokeDisplay in the center, wrapped in an ErrorBoundary for fault tolerance.
+5. Book Resumption Logic:
+   - When a user clicks a book from the library (handleResumeBook), it attempts to load full document data from local IndexedDB. If it is a cloud book not stored locally, it fetches the PDF file from the remote ImageKit URL, parses it via extractTextFromPDF, and resumes narration from the exact last read page, sentence, and word index.
+6. Mobile-Optimized Floating Quick-Action Bar:
+   - On mobile screens, renders a fixed bottom navigation pill with Rewind 10s, Play/Pause toggle, Fast-Forward 10s, and a drawer trigger button for reader controls.
+
+
+================================================================================
+FILE: app/layout.tsx
+================================================================================
+TYPE: Root Layout (Global Application Shell)
+PURPOSE:
+Defines the top-level HTML document structure, metadata, viewport configuration, global fonts, dark mode background styles, and authentication wrapping for the entire application.
+
+WHAT IT ACTUALLY DOES:
+1. Clerk Authentication Provider:
+   - Wraps all child pages and components in <ClerkProvider> to enable user sign-in, user profiles, session tokens, and authentication state across client and server components.
+2. Typography & Fonts:
+   - Configures Google Font Inter with CSS variable --font-inter, applying it across all HTML elements.
+3. Viewport & Responsive Design:
+   - Sets dynamic viewport scaling (initial scale 1, max scale 5) and theme color (#050b14) matching the midnight-blue dark UI aesthetic.
+4. SEO, OpenGraph & Social Metadata:
+   - Configures comprehensive metadata for search engines and social sharing, including app title, description, keywords (e.g. PDF reader, speed reading, karaoke reading, TTS reader, dyslexia friendly), author details, OpenGraph tags, and Twitter Cards.
+5. Base HTML/Body Framing:
+   - Enforces default dark mode (dark class, background #050b14, selection highlight color bg-amber-500, and horizontal scroll prevention overflow-x-hidden).
+
+
+================================================================================
+FILE: app/error.tsx
+================================================================================
+TYPE: Global Next.js App Router Error Page
+PURPOSE:
+Acts as the root catch-all boundary for unhandled runtime exceptions across the application (e.g., audio synthesis failures, rendering crashes, or network drops).
+
+WHAT IT ACTUALLY DOES:
+1. Error Logging & Diagnostics:
+   - Receives the thrown error object and Next.js error digest, logging technical details to the browser console for debugging.
+2. User-Friendly Error UI:
+   - Replaces crashed UI with a clean midnight/red card informing the user that an application error occurred while rendering or initializing audio synthesis.
+   - Displays the raw error message inside a scrollable monospaced code box.
+3. Recovery Actions:
+   - "Try Again" button: Calls the Next.js reset() method to re-render the segment without requiring a full page refresh.
+   - "Go Home" button: Navigates back to the root route (/) to reset document state and return the user to safety.
+
+
+================================================================================
+FILE: app/api/books/route.ts
+================================================================================
+TYPE: Next.js API Route (GET /api/books)
+PURPOSE:
+Retrieves the list of saved PDF files uploaded to cloud storage by the currently authenticated user.
+
+WHAT IT ACTUALLY DOES:
+1. Authentication Verification:
+   - Authenticates the incoming request using @clerk/nextjs/server's auth().
+   - If the user is unauthenticated (!userId), returns an empty list ({ files: [] }).
+2. Cloud Storage Query:
+   - Instantiates an ImageKit server SDK client using secret environment variables (IMAGEKIT_PRIVATE_KEY, NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY, NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT).
+   - Queries ImageKit for all PDF files residing in the user's isolated folder: /vocal_reader/${userId}/.
+3. Response Serialization:
+   - Returns a JSON response containing file objects with their names, file IDs, sizes, creation timestamps, and access URLs so the frontend can populate the cloud library.
+   - Catches and logs storage errors safely without failing the client.
+
+
+================================================================================
+FILE: app/api/dictionary/route.ts
+================================================================================
+TYPE: Next.js API Route (POST & GET /api/dictionary)
+PURPOSE:
+Provides AI-powered English word definitions, Hindi translations, phonetic pronunciations, and bilingual example sentences using Google Gemini AI, and manages saved vocabulary in the database using Prisma.
+
+WHAT IT ACTUALLY DOES:
+1. POST Request (Word Definition & AI Lookup):
+   - Accepts a JSON payload { word: "..." } and cleans the word string.
+   - Calls Google Gemini 2.5 Flash API (gemini-2.5-flash:generateContent) with a strict JSON system prompt requiring 5 keys:
+     * pronunciation: Phonetic spelling (e.g. /wɜːrd/)
+     * hin: Direct Hindi translation
+     * meaning: Short, clear English definition
+     * exampleEng: English example sentence
+     * exampleHin: Hindi translation of the example sentence
+   - Sanitizes Gemini output by stripping any markdown backticks before JSON parsing.
+   - Database Persistence (Prisma): If the user is authenticated via Clerk, executes an upsert on the SavedWord table keyed by compound unique index userId_word, storing or updating the definition and timestamp in PostgreSQL.
+   - Returns the structured dictionary data as JSON to the client.
+2. GET Request (User Vocabulary Retrieval):
+   - Authenticates the user via Clerk (auth()).
+   - If not logged in, returns a 401 Unauthorized response.
+   - Queries Prisma database for all words saved by userId, sorted in reverse chronological order (createdAt: 'desc').
+   - Returns { words: [...] } to feed the "My Vocabulary" drawer.
+
+
+================================================================================
+FILE: app/api/imagekit/auth/route.ts
+================================================================================
+TYPE: Next.js API Route (GET /api/imagekit/auth)
+PURPOSE:
+Generates client-side upload authentication parameters (token, expire timestamp, and cryptographic signature) required for direct browser-to-ImageKit file uploads.
+
+WHAT IT ACTUALLY DOES:
+1. Security Check:
+   - Verifies the user is logged into Clerk before allowing cloud upload token generation. Returns 401 Unauthorized for anonymous requests.
+2. Token Generation:
+   - Uses the ImageKit SDK (imagekit.getAuthenticationParameters()) with server-side private keys to generate a short-lived signature, token, and expiration timestamp.
+3. Client Handshake:
+   - Returns JSON authentication parameters to PDFUploader.tsx, enabling secure, client-side direct uploads to ImageKit without proxying heavy 50MB PDF binaries through the Next.js server.
+
+
+================================================================================
+FILE: components/KaraokeDisplay.tsx
+================================================================================
+TYPE: Core Interactive Reading Screen View / Sub-Page
+PURPOSE:
+The teleprompter and karaoke reading view where text is displayed, active sentences and words are highlighted in real-time, and readers can interact with words for AI dictionary definitions.
+
+WHAT IT ACTUALLY DOES:
+1. Continuous Karaoke Teleprompter:
+   - Renders all sentences of the currently active page in a vertical reading stream.
+   - The currently active sentence is magnified, given a prominent gradient/border glow, and automatically scrolled to the center of the viewport smoothly using DOM refs (scrollIntoView).
+   - Preceding sentences fade with slight blur; upcoming sentences remain visible in secondary contrast.
+2. Word-by-Word Highlight Tracking:
+   - Highlights the exact word currently being vocalized by speech synthesis or speed-read timer with high-visibility colors (amber or neon yellow in high contrast).
+3. Interactive AI Dictionary Lookup on Click:
+   - Clicking any word in the text triggers handleWordClick.
+   - Requires Clerk login (redirects to sign-in if guest).
+   - Immediately displays a floating dictionary card with an animated loading spinner while calling /api/dictionary.
+   - Displays English definition, Hindi translation, phonetic pronunciation, and dual-language example sentences.
+   - Includes a voice button to pronounce the individual word via Web Speech synthesis.
+   - On mobile screens, displays the dictionary card as a clean bottom sheet.
+4. Typography & Accessibility Customization:
+   - Dynamically applies font size (sm, md, lg, xl) and font family (sans, serif, mono, or dyslexia-spaced dyslexic mode).
+   - Adapts to High Contrast mode (pure black background, stark white text, yellow accents).
+5. Progress & Status Indicators:
+   - Displays a sticky top progress banner indicating whether narration is active or paused, the current sentence index versus total sentences, and the current page number.
+
+
+================================================================================
+FILE: components/SidebarControls.tsx
+================================================================================
+TYPE: Reading Control Center (Desktop Sidebar & Mobile Drawer View)
+PURPOSE:
+Houses all playback, audio, speed, typography, accessibility, and navigation controls, along with a live reading analytics dashboard.
+
+WHAT IT ACTUALLY DOES:
+1. Playback & Narration Controls:
+   - Play / Pause animated button with pulsing visual indicator.
+   - Rewind 10 seconds / Fast-Forward 10 seconds.
+   - Jump to Previous Sentence / Next Sentence.
+   - Restart reading from the very beginning of the document.
+2. Speed Control System (100–500 WPM):
+   - Interactive slider and quick-preset buttons (Slow at 150 WPM, Normal at 250 WPM, Fast at 350 WPM, Speed Read at 450 WPM).
+   - Color-coded badges indicating reading intensity.
+   - Live keyboard shortcut hint (Up/Down arrow keys).
+3. Real-Time Analytics Dashboard:
+   - Tracks Words Read vs. Total Words.
+   - Measures Time Elapsed (minutes and seconds).
+   - Displays Current Reading Speed (WPM).
+   - Shows Pages Completed vs. Total Pages.
+   - Live progress bar showing completion percentage and estimated time remaining.
+4. Direct Page Jump & Stepper:
+   - Direct numerical input to jump immediately to any page (1 to N).
+   - Previous and Next page arrow buttons.
+5. Accessibility & Typography Engine:
+   - High Contrast Mode toggle (Black & Yellow high-visibility scheme).
+   - Font Family selector: Sans-Serif (Inter), Serif (Georgia), Monospace (Courier), and Dyslexic (wide tracking and leading).
+   - Font Size selector: sm, md, lg, and xl.
+6. Voice & TTS Settings:
+   - Toggle Voice Narration ON or OFF (visual-only speed-reading mode).
+   - Dynamic voice dropdown listing all installed speech synthesis voices on the user's OS/browser, filtering and prioritizing natural voices.
+7. Responsive Dual Presentation:
+   - On desktop (lg+): Permanently docked 96-column left sidebar.
+   - On mobile: Slides up as a gesture-dismissible modal bottom drawer triggered from the floating bottom bar.
+
+
+================================================================================
+FILE: components/PDFUploader.tsx
+================================================================================
+TYPE: File Ingestion & Drag-and-Drop View
+PURPOSE:
+Provides the PDF upload interface with drag-and-drop support, multi-column text extraction, progress animations, and automatic cloud backup.
+
+WHAT IT ACTUALLY DOES:
+1. File Validation & Drag-and-Drop:
+   - Uses react-dropzone to accept .pdf files up to 50MB.
+   - Rejects invalid MIME types or oversized files with user-friendly error banners.
+2. Single-File Instant Extraction:
+   - Invokes extractTextFromPDF to extract clean text while preserving two-column reading flow.
+   - If user is logged in, automatically requests ImageKit upload credentials via /api/imagekit/auth and uploads the PDF to /vocal_reader/${userId}.
+   - Fires onDocumentLoaded to immediately transition to the reader view.
+3. Multi-File Cloud Library Uploads:
+   - When authenticated, allows selecting or dropping multiple PDFs simultaneously.
+   - Uploads all files in parallel to ImageKit and refreshes the user's reading library.
+4. Visual States & Feedback:
+   - Active drag state with glowing amber borders.
+   - Loading skeleton and spinner displaying real-time extraction stage ("Reading PDF structure...", "Saving to your cloud library...").
+   - Ready preview card displaying document name, human-readable file size, page count, and total sentence count.
+
+
+================================================================================
+FILE: components/LibraryGrid.tsx
+================================================================================
+TYPE: Saved Reading Library & Book History View
+PURPOSE:
+Displays the user's library of active and previous books with cover cards, reading progress bars, and one-click resumption.
+
+WHAT IT ACTUALLY DOES:
+1. Book History Visualization:
+   - Renders cards for each saved book with generated gradient thumbnail covers, page counts, and relative last-read timestamps (e.g. "Just now", "15m ago", "2d ago").
+2. Reading Progress Tracking:
+   - Visual progress bar showing exact completion percentage (0% to 100%) and the page where the user left off.
+3. One-Click Resume:
+   - Clicking a book card calls onResume, triggering handleResumeBook in app/page.tsx to reload the document and restore the exact page, sentence, and word position.
+4. Book Deletion:
+   - Trash icon button allowing users to delete a book from localStorage and IndexedDB.
+5. Empty State:
+   - Displays a clean empty-state card with an upload icon prompting the user to drop their first PDF.
+
+
+================================================================================
+FILE: components/Navbar.tsx
+================================================================================
+TYPE: Global Header Navigation Component
+PURPOSE:
+Provides top-level branding, external Android app download link, vocabulary drawer trigger, and Clerk authentication widgets.
+
+WHAT IT ACTUALLY DOES:
+1. Branding:
+   - Displays the VocalReader logo with glowing amber sparkles.
+2. Android APK Download:
+   - Direct button linking to the official VocalReader Android APK on GitHub for mobile installation.
+3. User Authentication & Profile:
+   - If logged out: Renders Clerk's <SignInButton> modal trigger.
+   - If logged in: Renders Clerk's <UserButton> avatar menu with account management options.
+4. Vocabulary Trigger:
+   - Displays "My Vocabulary" button for logged-in users to open the VocabularyList slide-over panel.
+
+
+================================================================================
+FILE: components/VocabularyList.tsx
+================================================================================
+TYPE: Vocabulary Slide-Over Panel / Saved Words Drawer View
+PURPOSE:
+Displays all words clicked and saved by the user while reading, along with their AI definitions, translations, and pronunciations.
+
+WHAT IT ACTUALLY DOES:
+1. Slide-Over Animated Drawer:
+   - Slides smoothly from the right side of the screen over an opaque backdrop using Framer Motion.
+2. Data Fetching:
+   - Calls GET /api/dictionary when opened to load the user's saved words from PostgreSQL.
+3. Word Cards:
+   - Renders each saved word with its phonetic pronunciation, Hindi meaning tag, English definition, and dual-language example sentences.
+   - Includes timestamp of when the word was looked up.
+4. Pronunciation Audio:
+   - Features a speaker icon on each card that speaks the word aloud using browser speech synthesis (SpeechSynthesisUtterance).
+
+
+================================================================================
+FILE: components/SplashScreen.tsx
+================================================================================
+TYPE: Animated Launch Splash View
+PURPOSE:
+Displays an animated, branded entrance screen when the application is first launched or refreshed.
+
+WHAT IT ACTUALLY DOES:
+1. Visual Presentation:
+   - Midnight-blue background with animated ambient glow orbs.
+   - Centered 3D animated book icon with floating sparkle badges.
+   - App title ("VOCAL READER") and tagline ("Read Faster, Comprehend Better").
+2. Loading Shimmer Bar:
+   - Displays a looping gradient shimmer progress bar.
+3. Entrance & Exit Transitions:
+   - Automatically unmounts with a smooth fade-and-scale exit transition after 2.2 seconds controlled by app/page.tsx.
+
+
+================================================================================
+FILE: components/ErrorBoundary.tsx
+================================================================================
+TYPE: React Class Error Boundary View
+PURPOSE:
+Provides fault isolation for the reader screen, catching PDF rendering or text parsing errors without crashing the entire app shell.
+
+WHAT IT ACTUALLY DOES:
+1. Exception Trapping:
+   - Catches lifecycle errors thrown by child components (e.g. invalid PDF encodings or memory spikes) using componentDidCatch.
+2. Fallback Error Card:
+   - Renders a warning card detailing that an issue occurred while processing the PDF.
+   - Shows the error message in a monospaced debug box.
+3. Recovery Triggers:
+   - "Retry / Reload Page" button to reset state.
+   - "Upload Different PDF" button to reset the document and return to the upload screen.
+
+
+================================================================================
+FILE: hooks/useVocalReader.ts
+================================================================================
+TYPE: Core Custom Hook / Audio & Reading Controller
+PURPOSE:
+The central engine controlling speech synthesis, karaoke word/sentence synchronization, speed pacing, keyboard shortcuts, and reading progress calculation.
+
+WHAT IT ACTUALLY DOES:
+1. Speech Synthesis Synchronization (TTS):
+   - Initializes window.speechSynthesis and loads system voices.
+   - Manages an utterance queue that reads sentences sequentially.
+   - Uses speech boundary events (onboundary) to match spoken words to exact word indices for live karaoke highlighting.
+2. Visual Speed Reading Fallback (TTS Disabled):
+   - When voice is disabled, runs an interval timer based on the active WPM ((60 / wpm) * 1000) to highlight words at exact reading speed.
+3. Live Position Controls:
+   - Supports jumping to any page, sentence, or word.
+   - Supports 10-second forward/backward time skipping.
+4. Auto-Save Reading State:
+   - Automatically writes current progress (page, sentence index, word index, and percentage) to IndexedDB and localStorage using debounced storage calls.
+5. Keyboard Shortcuts:
+   - Listens for Up and Down arrow keys to increase or decrease WPM on the fly.
+
+
+================================================================================
+FILE: lib/pdfParser.ts
+================================================================================
+TYPE: PDF Extraction & Column Detection Utility
+PURPOSE:
+Parses raw PDF binary files, detects multi-column layouts, and extracts clean, ordered text segmented into sentences.
+
+WHAT IT ACTUALLY DOES:
+1. Multi-Column Layout Detection:
+   - Inspects the X and Y coordinates of text items on each page.
+   - Detects two-column research paper structures by evaluating whitespace gutters between 45% and 55% of the page width.
+   - Sorts text down column 1 first, then column 2, preventing the common bug where reading order jumps horizontally across columns.
+2. Sentence Segmentation:
+   - Splits continuous text into clean sentences using Intl.Segmenter where available, with a regex fallback handling sentence termination punctuation (., !, ?).
+3. Standardized Output:
+   - Returns a structured PDFDocumentData object containing pages, page numbers, full text, and sentence arrays.
+
+
+================================================================================
+FILE: lib/storage.ts
+================================================================================
+TYPE: Client-Side Offline Persistence Manager
+PURPOSE:
+Provides offline persistence for reading history and full PDF text using a hybrid IndexedDB and localStorage model.
+
+WHAT IT ACTUALLY DOES:
+1. IndexedDB (VocalReaderDB):
+   - Stores full extracted document data (PDFDocumentData) so large documents can be reopened instantly offline without re-parsing.
+2. LocalStorage (vocal_reader_library_metadata):
+   - Stores lightweight metadata (name, page count, last read page, sentence, word, percentage, and timestamp) for fast library rendering.
+3. CRUD Operations:
+   - saveBookToLibrary: Upserts book metadata and full text.
+   - loadBookFromLibrary: Retrieves full document data by book name.
+   - removeBookFromLibrary: Deletes the book from both IndexedDB and localStorage.
+
+
+================================================================================
+FILE: proxy.ts
+================================================================================
+TYPE: Clerk Authentication Edge Middleware
+PURPOSE:
+Protects application routes and API endpoints, ensuring secure access to user data.
+
+WHAT IT ACTUALLY DOES:
+1. Route Protection:
+   - Defines public routes (/, /sign-in, /sign-up).
+   - Protects private routes and API endpoints, requiring a valid Clerk session for sensitive operations.
+2. Filter Matcher:
+   - Skips Next.js internals, static assets (images, fonts, stylesheets), and runs on API routes.
+
+
+================================================================================
+FILE: prisma/schema.prisma
+================================================================================
+TYPE: Database Schema Configuration (Prisma ORM)
+PURPOSE:
+Defines the database tables and relations for user vocabulary tracking in PostgreSQL.
+
+WHAT IT ACTUALLY DOES:
+1. SavedWord Model:
+   - Stores user vocabulary with fields: id, word, pronunciation, meaning, hin (Hindi translation), exampleEng, exampleHin, userId, and createdAt.
+   - Defines a compound unique index @@unique([userId, word]) so each user maintains a unique dictionary entry per word.
+================================================================================

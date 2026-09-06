@@ -1,0 +1,112 @@
+# Environment & Secrets (NEVER push .env files)
+.env
+.env.*
+.env*.local
+*.env
+**/.env
+**/.env.*
+**/.env*.local
+!**/.env.example
+!**/.env.production.example
+
+# Keep .gitkeep files for tracking directory structure
+!**/.gitkeep
+
+# Node Dependencies
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python & Virtual Environments
+.venv/
+**/.venv/
+venv/
+**/venv/
+ENV/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Build Outputs & Bundles
+dist/
+**/dist/
+build/
+**/build/
+out/
+**/out/
+.next/
+**/.next/
+web-build/
+**/web-build/
+.expo/
+**/.expo/
+
+# AiPythonServer Runtime & Local Data
+AiPythonServer/uploads/
+AiPythonServer/figures/
+AiPythonServer/info.db/
+AiPythonServer/*.pdf
+AiPythonServer/:memory:.ses
+*.pdf
+*.ses
+*.sqlite
+*.sqlite3
+
+# Logs & Runtime
+logs/
+**/logs/
+*.log
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Testing & Coverage
+coverage/
+**/coverage/
+.nyc_output/
+cypress/screenshots/
+cypress/videos/
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.claude/
+**/.claude/
+.windsurf/
+**/.windsurf/
+.agents/
+**/.agents/
+.vercel
+**/.vercel
+.clerk/
+**/.clerk/
+
+# Mobile / Expo Specific
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+/ios
+/android
+
+# TypeScript Cache
+*.tsbuildinfo
+next-env.d.ts

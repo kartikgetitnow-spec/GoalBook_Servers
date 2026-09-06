@@ -1,0 +1,231 @@
+version: '3.8'
+
+networks:
+  db-net:
+    driver: bridge
+
+volumes:
+  etcd-data:
+  pg-data-1:
+  pg-data-2:
+  pg-data-3:
+  prometheus-data:
+  grafana-data:
+
+services:
+  # etcd for service discovery
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: etcd
+    command:
+      - etcd
+      - --name=etcd1
+      - --data-dir=/etcd-data
+      - --advertise-client-urls=http://0.0.0.0:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://0.0.0.0:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd1=http://0.0.0.0:2380
+      - --initial-cluster-state=new
+    volumes:
+      - etcd-data:/etcd-data
+    networks:
+      - db-net
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL Node 1 (Can be master or replica)
+  postgres-1:
+    image: postgres:15-alpine
+    container_name: postgres-1
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: mydb
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: |
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby=on
+      -c archive_mode=on
+      -c archive_command='/bin/true'
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_keep_size=1GB
+      -c logging_collector=on
+      -c log_directory='pg_log'
+      -c log_filename='postgresql-%a.log'
+      -c log_statement='ddl'
+      -c log_min_duration_statement=1000
+    volumes:
+      - pg-data-1:/var/lib/postgresql/data
+      - ./backups:/backups
+      - ./logs:/logs
+    networks:
+      - db-net
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  # PostgreSQL Node 2 (Replica)
+  postgres-2:
+    image: postgres:15-alpine
+    container_name: postgres-2
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: mydb
+    command: |
+      postgres
+      -c hot_standby=on
+      -c max_connections=200
+      -c shared_buffers=256MB
+    volumes:
+      - pg-data-2:/var/lib/postgresql/data
+      - ./logs:/logs
+    networks:
+      - db-net
+    ports:
+      - "5433:5432"
+    depends_on:
+      - postgres-1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL Node 3 (Replica)
+  postgres-3:
+    image: postgres:15-alpine
+    container_name: postgres-3
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: mydb
+    command: |
+      postgres
+      -c hot_standby=on
+      -c max_connections=200
+      -c shared_buffers=256MB
+    volumes:
+      - pg-data-3:/var/lib/postgresql/data
+      - ./logs:/logs
+    networks:
+      - db-net
+    ports:
+      - "5434:5432"
+    depends_on:
+      - postgres-1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # HAProxy for load balancing
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: haproxy
+    volumes:
+      - ./configs/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - db-net
+    ports:
+      - "5000:5000"  # Master port for writes
+      - "5001:5001"  # Replica port for reads
+      - "8404:8404"  # Stats dashboard
+    depends_on:
+      - postgres-1
+      - postgres-2
+      - postgres-3
+
+  # PgBouncer for connection pooling
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer
+    environment:
+      DB_USER: admin
+      DB_PASSWORD: admin123
+      DB_HOST: haproxy
+      DB_PORT: 5001
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 20
+    volumes:
+      - ./configs/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./configs/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    networks:
+      - db-net
+    ports:
+      - "6432:6432"
+    depends_on:
+      - haproxy
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - db-net
+    ports:
+      - "9090:9090"
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - db-net
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+  # PostgreSQL Exporter for metrics
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.14.0
+    container_name: postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://admin:admin123@haproxy:5001/mydb?sslmode=disable"
+    networks:
+      - db-net
+    ports:
+      - "9187:9187"
+    depends_on:
+      - haproxy
